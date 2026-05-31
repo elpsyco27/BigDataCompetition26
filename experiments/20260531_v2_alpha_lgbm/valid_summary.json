@@ -1,0 +1,5 @@
+{
+  "valid_days": 40,
+  "mean_topk_return": 0.0074320894515139905,
+  "mean_topk_alpha": 0.006456072483097847
+}

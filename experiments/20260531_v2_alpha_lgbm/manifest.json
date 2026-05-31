@@ -1,0 +1,39 @@
+{
+  "experiment_name": "20260531_v2_alpha_lgbm",
+  "created_at": "2026-05-31T01:04:15",
+  "model_type": "LightGBMRegressor",
+  "target": "future_alpha_5d",
+  "score_method": "risk_adjusted_pred_alpha_top5_equal_weight",
+  "feature_count": 68,
+  "train_data": {
+    "rows": 171890,
+    "stock_count": 300,
+    "start_date": "2024-01-02",
+    "end_date": "2026-05-22"
+  },
+  "test_data": {
+    "rows": 1500,
+    "stock_count": 300,
+    "start_date": "2026-05-25",
+    "end_date": "2026-05-29"
+  },
+  "raw_data": {
+    "rows": 173390,
+    "stock_count": 300,
+    "start_date": "2024-01-02",
+    "end_date": "2026-05-29"
+  },
+  "valid_summary": {
+    "valid_days": 40,
+    "mean_topk_return": 0.0074320894515139905,
+    "mean_topk_alpha": 0.006456072483097847
+  },
+  "self_score": 0.0591743267321821,
+  "copied_files": {
+    "model": true,
+    "valid_summary": true,
+    "valid_detail": true,
+    "result": true,
+    "score": true
+  }
+}

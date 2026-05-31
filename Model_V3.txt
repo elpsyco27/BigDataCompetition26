@@ -1,0 +1,1929 @@
+你的 v2 思路已经很像一个“正式量化选股模型”了。接下来优化时，我建议不要先急着堆更多模型，而是按这个优先级来：
+
+> **先优化验证体系 → 再优化标签和排序目标 → 再优化风险调整 score → 再加特征 → 最后做组合权重和模型集成。**
+> 
+
+因为如果验证方式不稳，后面所有优化都可能是在“调验证集噪声”。
+
+---
+
+# 一、第一优先级：把验证体系升级成滚动验证
+
+你现在是：
+
+```
+最后 40 个交易日作为验证集
+```
+
+这个能快速迭代，但有一个问题：
+
+> 只验证了最后一段行情，模型可能刚好适应那 40 天的市场风格。
+> 
+
+比如最后 40 天如果是强趋势行情，动量因子很有效；如果换成震荡行情，动量可能失效。
+
+所以建议升级成 **walk-forward rolling validation**。
+
+---
+
+## 1. 推荐验证方式
+
+例如：
+
+```
+训练集 1：前 70% 日期
+验证集 1：之后 40 个交易日
+
+训练集 2：前 75% 日期
+验证集 2：之后 40 个交易日
+
+训练集 3：前 80% 日期
+验证集 3：之后 40 个交易日
+
+训练集 4：前 85% 日期
+验证集 4：之后 40 个交易日
+
+训练集 5：前 90% 日期
+验证集 5：之后 40 个交易日
+```
+
+最后看平均表现：
+
+```
+mean_score
+median_score
+win_rate
+max_drawdown
+每期 top5 收益稳定性
+```
+
+你的目标不是某一次验证分最高，而是：
+
+> 多个时间窗口下都不差。
+> 
+
+---
+
+## 2. 为什么这很重要？
+
+因为股票模型最怕：
+
+```
+最后 40 天验证集表现很好
+但换一个时间段就失效
+```
+
+你现在 v2 自评分从：
+
+```
+v1: -0.000711
+v2:  0.059174
+```
+
+提升很明显，但还需要确认它不是某段行情偶然有效。
+
+---
+
+## 3. 建议新增验证指标
+
+不要只看最终收益，可以加这些：
+
+```
+top5_avg_return
+top5_median_return
+top5_win_rate
+top1_hit_rate
+daily_rank_ic
+daily_rank_ic_mean
+daily_rank_ic_std
+daily_rank_ic_ir
+max_drawdown
+```
+
+尤其推荐加 **Rank IC**。
+
+---
+
+# 二、第二优先级：加入 Rank IC 作为模型评价指标
+
+你现在本质上不是要预测精确收益率，而是要做排序：
+
+```
+每天 300 只股票里，谁更靠前？
+```
+
+所以光看回归误差意义不大。
+
+更应该看：
+
+> 模型预测排名和真实未来收益排名是否一致。
+> 
+
+这就是 Rank IC。
+
+---
+
+## 1. Rank IC 是什么？
+
+每天计算：
+
+```
+pred_alpha 的横截面排名
+真实 future_return 或 future_alpha 的横截面排名
+```
+
+然后算 Spearman 相关系数。
+
+如果：
+
+```
+Rank IC > 0
+```
+
+说明模型倾向于把未来表现更好的股票排在前面。
+
+---
+
+## 2. 为什么 Rank IC 适合你？
+
+因为比赛只选前 5 只，不关心你预测值是不是精确，比如：
+
+```
+真实收益 3%，模型预测 1.5%
+真实收益 2%，模型预测 1.2%
+```
+
+预测数值低估没关系，只要排序对了就有用。
+
+---
+
+## 3. 可以这样理解
+
+你真正想要的是：
+
+```
+模型把好股票排到前面
+```
+
+而不是：
+
+```
+模型准确预测每只股票收益率是多少
+```
+
+所以建议你在 valid_summary 里加入：
+
+```
+rank_ic_mean
+rank_ic_std
+rank_ic_ir = rank_ic_mean / rank_ic_std
+```
+
+如果某个模型收益高但 Rank IC 不稳定，要谨慎。
+
+---
+
+# 三、第三优先级：优化标签，不只做均值去市场化
+
+你现在的标签是：
+
+```
+future_alpha_5d = future_return_5d - 当天股票池 future_return_5d 均值
+```
+
+这个已经比直接预测 raw return 好，但还可以继续改。
+
+---
+
+## 方案 1：用横截面标准化 alpha
+
+现在你只是减均值：
+
+```
+alpha = r_i - mean(r)
+```
+
+可以进一步除以当天横截面标准差：
+
+```
+alpha_z = (future_return_5d - daily_mean) / daily_std
+```
+
+也就是：
+
+```python
+df["future_alpha_z_5d"] = (
+    df["future_return_5d"] 
+    - df.groupby("date")["future_return_5d"].transform("mean")
+) / (
+    df.groupby("date")["future_return_5d"].transform("std") + 1e-6
+)
+```
+
+这样标签变成：
+
+> 这只股票未来 5 天在当天股票池中强了几个标准差。
+> 
+
+这个比单纯 alpha 更适合横截面排序。
+
+---
+
+## 方案 2：用分位数标签
+
+比如每天按未来收益排名，构造：
+
+```
+future_return_rank = 当天未来收益的百分位排名
+```
+
+范围是：
+
+```
+0 到 1
+```
+
+越接近 1 表示未来表现越好。
+
+```python
+df["target_rank"] = df.groupby("date")["future_return_5d"].rank(pct=True)
+```
+
+然后模型预测这个 rank。
+
+这会把任务从“预测收益大小”转为：
+
+> 预测股票未来相对排名。
+> 
+
+对你的目标更直接。
+
+---
+
+## 方案 3：只预测 top 分组概率
+
+你也可以把问题转成分类：
+
+```
+未来收益排名前 10% = 1
+其他 = 0
+```
+
+例如：
+
+```python
+df["target_top10"] = (
+    df.groupby("date")["future_return_5d"].rank(pct=True) >= 0.9
+).astype(int)
+```
+
+然后用：
+
+```python
+LGBMClassifier
+```
+
+预测：
+
+```
+这只股票进入未来前 10% 的概率
+```
+
+最后按概率排序选 top5。
+
+这个可能比回归更稳，因为短期收益率噪声很大，精确数值很难预测，但“是否相对强”可能更容易学。
+
+---
+
+## 你可以同时实验三个目标
+
+建议做三组实验：
+
+```
+A. target = future_alpha_5d
+B. target = future_alpha_z_5d
+C. target = target_rank
+D. target = target_top10
+```
+
+然后用同一套滚动验证比较。
+
+我个人更推荐你优先试：
+
+```
+target_rank
+```
+
+或者：
+
+```
+future_alpha_z_5d
+```
+
+因为它们更贴近“横截面选股”。
+
+---
+
+# 四、第四优先级：优化风险调整 score
+
+你现在的 score 是：
+
+```
+score = pred_alpha / (residual_vol_60 + 1e-6)
+```
+
+这个思想很好，类似信息比率。
+
+但这里有一个潜在问题：
+
+> 如果 residual_vol_60 非常小，score 会被异常放大。
+> 
+
+即使加了 `1e-6`，仍然可能导致某些低波动、低流动性、预测值略高的股票被推到前面。
+
+---
+
+## 1. 给 residual_vol 做下限截断
+
+可以这样：
+
+```python
+risk = df["residual_vol_60"].copy()
+risk_floor = risk.quantile(0.1)
+risk = risk.clip(lower=risk_floor)
+
+df["score"] = df["pred_alpha"] / risk
+```
+
+含义：
+
+> 不允许风险分母过小。
+> 
+
+---
+
+## 2. 给 score 做 winsorize
+
+极端 score 可能来自异常值，可以截尾：
+
+```python
+lower = df.groupby("date")["score"].transform(lambda x: x.quantile(0.01))
+upper = df.groupby("date")["score"].transform(lambda x: x.quantile(0.99))
+
+df["score"] = df["score"].clip(lower, upper)
+```
+
+---
+
+## 3. 尝试更一般的 score 公式
+
+你现在是：
+
+```
+score = pred_alpha / residual_vol
+```
+
+可以扩展成：
+
+```
+score = pred_alpha 
+        - λ1 * residual_vol_60
+        - λ2 * vol_20
+        - λ3 * max_drawdown_20
+```
+
+或者：
+
+```
+score = pred_alpha / (residual_vol_60 ** p)
+```
+
+其中：
+
+```
+p 可以取 0, 0.5, 1.0, 1.5
+```
+
+不同 p 的含义：
+
+```
+p = 0：不惩罚风险，只看 pred_alpha
+p = 0.5：轻度风险惩罚
+p = 1.0：标准信息比率
+p = 1.5：强风险惩罚
+```
+
+你可以做参数搜索：
+
+```
+score_p = pred_alpha / (risk ** p)
+```
+
+验证：
+
+```
+p = 0
+p = 0.25
+p = 0.5
+p = 0.75
+p = 1.0
+p = 1.25
+```
+
+看哪个在滚动验证中更稳。
+
+---
+
+## 4. 加入流动性惩罚
+
+如果某只股票成交额太低，短期收益容易极端，不一定稳。
+
+可以加入过滤条件：
+
+```
+amount_mean_20_rank >= 0.2
+turnover_mean_20 不为空
+过去 20 日有效交易天数足够
+```
+
+或者 score 中加入：
+
+```
+score = score + λ_liq * amount_mean_20_rank
+```
+
+不过我更建议先用过滤，而不是加权：
+
+```
+过滤掉流动性最差的 20%
+```
+
+这样简单稳定。
+
+---
+
+# 五、第五优先级：增加“市场状态”特征
+
+你现在的模型主要是个股横截面特征。下一步可以加入一个很有用的部分：
+
+> 当前市场环境。
+> 
+
+因为同一个因子在不同市场环境下效果不一样。
+
+例如：
+
+```
+上涨行情：动量因子可能有效
+震荡行情：反转因子可能有效
+下跌行情：低波动、防御因子可能有效
+```
+
+---
+
+## 1. 可以构造市场状态特征
+
+用股票池平均收益或沪深 300 指数构造：
+
+```
+market_ret_1d
+market_ret_5d
+market_ret_20d
+market_vol_20d
+market_drawdown_20d
+market_above_ma20
+```
+
+如果暂时没有真实沪深 300 指数，就用股票池等权平均收益近似：
+
+```python
+market_daily_ret = df.groupby("date")["ret_1d"].mean()
+```
+
+然后 merge 回每只股票。
+
+---
+
+## 2. 加入市场宽度指标
+
+市场宽度很重要：
+
+```
+当天上涨股票占比
+过去 5 日上涨股票占比
+过去 20 日上涨股票占比
+```
+
+例如：
+
+```python
+breadth = df.groupby("date")["ret_1d"].apply(lambda x: (x > 0).mean())
+```
+
+这表示：
+
+> 市场是普涨、普跌，还是结构性行情。
+> 
+
+---
+
+## 3. 加入截面分化指标
+
+比如：
+
+```
+当天股票收益横截面标准差
+过去 5 日横截面波动均值
+```
+
+如果市场分化很大，选股模型更容易发挥；如果普涨普跌，alpha 模型难度更高。
+
+---
+
+# 六、第六优先级：加入行业、市值、基本面因子
+
+你已经指出了当前限制：
+
+```
+没有行业、财务、市值等基本面因子
+```
+
+这确实是下一步的重要优化方向。
+
+---
+
+## 1. 行业因子：优先级很高
+
+行业信息对沪深 300 很重要。
+
+因为如果你的模型只按 score 排序，可能会选出：
+
+```
+5 只全是银行
+5 只全是新能源
+5 只全是医药
+```
+
+短期如果行业判断错，组合风险很集中。
+
+可以做两件事：
+
+### 方法 A：加入行业特征
+
+```
+industry one-hot
+industry_return_5d
+industry_return_20d
+industry_rank
+industry_vol_20d
+```
+
+### 方法 B：行业约束
+
+选 top5 时限制：
+
+```
+同一行业最多选 2 只
+```
+
+这对稳健性很有帮助。
+
+---
+
+## 2. 市值因子：很有价值
+
+如果你能拿到市值，可以加入：
+
+```
+market_cap
+log_market_cap
+market_cap_rank
+```
+
+沪深 300 内部也有大盘、中盘差异。
+
+有些市场环境大盘股强，有些中盘股强。
+
+---
+
+## 3. 财务因子：适合中长期，但短期也可辅助
+
+你可以加入：
+
+```
+PE
+PB
+ROE
+ROA
+净利润增长率
+营收增长率
+资产负债率
+经营现金流
+毛利率
+净利率
+```
+
+但要注意：
+
+> 财务数据更新频率低，对 5 日收益预测不一定直接有效。
+> 
+
+它更适合作为风格过滤或稳健性控制，而不是核心短期信号。
+
+例如：
+
+```
+过滤掉 ROE 太低、负债率太高、亏损股
+```
+
+或者：
+
+```
+加入质量因子 rank
+```
+
+---
+
+# 七、第七优先级：尝试真正的排序模型
+
+你现在是：
+
+```
+LGBMRegressor 预测 alpha
+然后排序
+```
+
+这个是合理 baseline。
+
+但更贴近任务的是：
+
+```
+Learning to Rank
+```
+
+也就是：
+
+```
+LGBMRanker
+```
+
+---
+
+## 1. 为什么 LGBMRanker 更匹配？
+
+因为你的目标是：
+
+```
+每天在 300 只股票里排序
+```
+
+而不是预测绝对数值。
+
+LGBMRanker 可以按日期分组：
+
+```
+每一天是一组 query
+组内 300 只股票排序
+```
+
+标签可以用：
+
+```
+future_return_rank
+```
+
+或者分档：
+
+```
+未来收益前 10%：4
+10%-30%：3
+30%-50%：2
+50%-70%：1
+后 30%：0
+```
+
+---
+
+## 2. 排序标签示例
+
+```python
+rank_pct = df.groupby("date")["future_return_5d"].rank(pct=True)
+
+df["rank_label"] = 0
+df.loc[rank_pct >= 0.7, "rank_label"] = 1
+df.loc[rank_pct >= 0.85, "rank_label"] = 2
+df.loc[rank_pct >= 0.95, "rank_label"] = 3
+```
+
+然后每天作为一组训练。
+
+---
+
+## 3. 注意
+
+LGBMRanker 实现稍复杂一些，而且如果数据量不是很大，未必一定超过回归模型。
+
+所以建议顺序是：
+
+```
+先优化 LGBMRegressor + rank target
+再尝试 LGBMRanker
+```
+
+---
+
+# 八、第八优先级：模型集成
+
+等你的单模型稳定之后，可以做 ensemble。
+
+---
+
+## 1. 不同标签集成
+
+例如训练三个模型：
+
+```
+model_1: target = future_alpha_5d
+model_2: target = future_alpha_z_5d
+model_3: target = future_rank_5d
+```
+
+最后：
+
+```
+score = 0.4 * score_1 + 0.3 * score_2 + 0.3 * score_3
+```
+
+---
+
+## 2. 不同窗口集成
+
+比如：
+
+```
+模型 A：使用最近 1 年训练
+模型 B：使用最近 2 年训练
+模型 C：使用全部历史训练
+```
+
+短期股票规律会变，使用不同训练窗口可以提高稳健性。
+
+---
+
+## 3. 不同随机种子集成
+
+LightGBM 可以用不同 seed：
+
+```
+seed = 1, 7, 21, 42, 2026
+```
+
+取预测均值。
+
+这通常能降低随机波动。
+
+---
+
+# 九、第九优先级：改进权重分配
+
+你现在是：
+
+```
+top5 等权，每只 0.2
+```
+
+其实等权很稳，不一定差。
+
+但如果你想体现证券组合思想，可以尝试两个简单版本。
+
+---
+
+## 方案 1：风险倒数加权
+
+```
+weight_i = (1 / risk_i) / sum(1 / risk_i)
+```
+
+其中：
+
+```
+risk_i = residual_vol_60
+```
+
+这表示：
+
+> 风险低的股票多配一点，风险高的少配一点。
+> 
+
+为了避免极端权重，可以限制：
+
+```
+单只股票权重 ∈ [0.1, 0.3]
+```
+
+最后归一化。
+
+---
+
+## 方案 2：score 正值加权
+
+```
+weight_i = score_i / sum(score_i)
+```
+
+但这个容易出现一只股票权重过高，所以也要限制：
+
+```
+max_weight = 0.3
+min_weight = 0.1
+```
+
+---
+
+## 方案 3：等权 + 现金控制
+
+如果 top5 的 score 普遍很低，可以不满仓：
+
+```
+如果第 5 名 score < 某阈值，则只买前 3 只
+如果 top1 score 也很低，则保留现金
+```
+
+比赛允许：
+
+```
+权重和不超过 1
+```
+
+所以保留现金是合法的。
+
+但是否有效要验证，因为如果整体市场上涨，保留现金会拖累收益。
+
+---
+
+# 十、第十优先级：检查是否存在数据泄露
+
+这个非常关键。你现在的框架里有几个地方要特别小心。
+
+---
+
+## 1. future_alpha 标签没有问题，但只能用于训练标签
+
+你用：
+
+```
+market_future_return_5d = 当天所有股票 future_return_5d 的均值
+```
+
+构造训练目标，这本身可以接受，因为它是标签的一部分。
+
+但注意：
+
+> 这个 future market return 不能作为预测时的特征。
+> 
+
+只要它只出现在 target 中，就没问题。
+
+---
+
+## 2. 横截面 rank 特征要只用当天可见信息
+
+比如：
+
+```
+return_20_rank
+vol_20_rank
+amount_mean_20_rank
+```
+
+这些都是用历史特征做当天横截面 rank，可以。
+
+但不能对：
+
+```
+future_return
+future_alpha
+```
+
+做 rank 后误放进 feature_cols。
+
+建议你在代码里显式排除：
+
+```python
+exclude_cols = [
+    "future_return_5d",
+    "market_future_return_5d",
+    "future_alpha_5d",
+    "future_alpha_z_5d",
+    "target_rank",
+    "target_top10",
+]
+```
+
+---
+
+## 3. StandardScaler 是否必要？
+
+对 LightGBM 来说：
+
+> StandardScaler 不是必须的。
+> 
+
+树模型不依赖线性尺度。是否标准化通常不会带来明显好处。
+
+不过如果你已经把 scaler 封装进训练和预测流程，并且没有泄露验证集数据，也可以保留。
+
+但我建议你做一个对照实验：
+
+```
+A. 使用 StandardScaler
+B. 不使用 StandardScaler
+```
+
+看滚动验证结果。
+
+很多时候，不标准化反而更简单、更少风险。
+
+---
+
+# 十一、我建议你下一轮实验这样排
+
+不要同时改太多东西。你可以按下面顺序做 ablation。
+
+---
+
+## 实验 1：验证体系升级
+
+保持模型不变，只改验证方式：
+
+```
+单一最后 40 日验证
+→ 多窗口 rolling validation
+```
+
+目标：
+
+```
+确认 v2 是否稳定
+```
+
+---
+
+## 实验 2：标签对比
+
+使用同样特征、同样模型，比较：
+
+```
+A. future_alpha_5d
+B. future_alpha_z_5d
+C. target_rank
+D. target_top10
+```
+
+看：
+
+```
+平均 top5 收益
+Rank IC
+收益稳定性
+```
+
+---
+
+## 实验 3：score 参数搜索
+
+固定最佳标签，比较：
+
+```
+score = pred
+score = pred / risk^0.5
+score = pred / risk
+score = pred - 0.2 * vol_20
+score = pred - 0.2 * residual_vol_60 - 0.1 * max_drawdown_20
+```
+
+---
+
+## 实验 4：加入过滤条件
+
+例如：
+
+```
+过滤 amount_mean_20_rank < 0.2
+过滤 vol_20_rank > 0.95
+过滤 max_drawdown_20 过大
+```
+
+看是否提升稳定性。
+
+---
+
+## 实验 5：加入市场状态特征
+
+新增：
+
+```
+market_ret_5
+market_ret_20
+market_vol_20
+market_breadth_5
+market_breadth_20
+cross_section_std
+```
+
+---
+
+## 实验 6：加入行业约束或行业特征
+
+如果能拿到行业数据，优先试：
+
+```
+同一行业最多选 2 只
+```
+
+这个实现简单，但可能显著降低组合集中风险。
+
+---
+
+# 十二、推荐你下一版 v3 的方向
+
+我建议 v3 不要做得太散，明确成：
+
+> **v3：横截面排序 + 稳健风险调整模型**
+> 
+
+具体可以这样定义：
+
+```
+目标：
+从预测 alpha 改为预测横截面 rank / z-score alpha。
+
+标签：
+future_alpha_z_5d 或 target_rank。
+
+模型：
+LightGBMRegressor。
+
+验证：
+多窗口 rolling validation + Rank IC。
+
+排序：
+score = pred_rank / residual_vol_60^p，其中 p 通过验证集搜索。
+
+过滤：
+剔除低流动性、高极端波动股票。
+
+组合：
+先继续等权，避免权重优化引入额外噪声。
+```
+
+这版最值得做，因为它直接解决你当前模型的两个核心问题：
+
+```
+1. 还不是真正排序目标
+2. score 参数没有验证
+```
+
+---
+
+# 十三、你可以写成项目迭代路线
+
+最终你的项目可以形成清晰版本：
+
+```
+v1：直接预测 future_return_5d
+v2：预测 future_alpha_5d + residual risk adjusted score
+v3：预测横截面 rank / z-score alpha + rolling validation
+v4：加入市场状态和行业约束
+v5：多模型集成 + 权重优化
+```
+
+这样项目逻辑非常完整，而且每一版都有明确改进点。
+
+---
+
+# 十四、最建议你马上做的 3 件事
+
+如果只选三件，我建议：
+
+## 1. 加 rolling validation
+
+先验证 v2 是否真的稳。
+
+## 2. 把 target 改成横截面 rank 或 alpha z-score
+
+这比直接预测 alpha 更贴近比赛目标。
+
+## 3. 对 score 做参数搜索
+
+尤其比较：
+
+```
+pred_alpha
+pred_alpha / residual_vol_60^0.5
+pred_alpha / residual_vol_60
+pred_alpha - λ * risk
+```
+
+你现在的模型已经不是简单 baseline 了，下一步关键不是“再加很多特征”，而是把它从：
+
+```
+回归 alpha 模型
+```
+
+推进到：
+
+```
+横截面排序 + 稳健风险调整模型
+```
+
+这样会更符合比赛本质，也更符合你最开始提出的“稳健性比单次收益预测更重要”的判断。
+
+可以。你现在的模型主要使用**量价数据**，下一步“引入其他信息”本质上就是把更多可解释的外部变量变成：
+
+```
+某只股票在某一天可观测到的特征
+```
+
+然后并入你现有的训练表：
+
+```
+date, stock_id, 原有量价特征, 新增信息特征, target
+```
+
+重点不是信息越多越好，而是要满足三个条件：
+
+1. **比赛允许：免费公开可获取**
+2. **预测当天已经能知道，不能用未来信息**
+3. **能和股票代码、日期正确对齐**
+
+---
+
+# 一、优先引入哪些信息？
+
+我建议按优先级分 5 类。
+
+---
+
+## 1. 市场整体信息：最应该先加
+
+你现在用“股票池平均收益”近似市场收益，这是可以的。下一步可以加入更明确的市场状态特征。
+
+可以用：
+
+- 沪深 300 指数收益率
+- 上证指数收益率
+- 深证成指收益率
+- 创业板指数收益率
+- 中证 500 / 中证 1000 收益率
+- 市场波动率
+- 市场成交额
+- 市场上涨股票占比
+
+这些特征能告诉模型：
+
+```
+当前是上涨行情、下跌行情、震荡行情，还是高波动行情？
+```
+
+### 可以构造的特征
+
+```
+hs300_ret_1
+hs300_ret_5
+hs300_ret_20
+hs300_vol_20
+hs300_ma20_gap
+market_breadth_1
+market_breadth_5
+market_cross_section_std
+```
+
+其中：
+
+```
+market_breadth = 当天上涨股票数量 / 股票总数
+```
+
+这个很有用，因为它反映市场宽度。
+
+例如：
+
+```
+上涨股票占比 80%：普涨行情
+上涨股票占比 20%：普跌行情
+上涨股票占比 50%：结构性行情
+```
+
+---
+
+## 2. 行业信息：第二优先级
+
+行业信息非常重要，因为股票短期表现经常有行业轮动。
+
+比如：
+
+```
+新能源强
+银行强
+医药弱
+消费反弹
+半导体回调
+```
+
+如果没有行业特征，你的模型只能看个股量价，不能理解：
+
+```
+这只股票是不是属于当前强势行业？
+```
+
+### 可以加入的行业特征
+
+假设你有每只股票的行业分类：
+
+```
+stock_id, industry
+600000, 银行
+000858, 食品饮料
+300750, 电力设备
+```
+
+然后构造：
+
+```
+industry_ret_1
+industry_ret_5
+industry_ret_20
+industry_vol_20
+industry_rank_5
+industry_rank_20
+stock_vs_industry_ret_5
+stock_vs_industry_ret_20
+```
+
+其中：
+
+```
+stock_vs_industry_ret_20 = 个股过去20日收益 - 所属行业过去20日平均收益
+```
+
+它表示：
+
+> 这只股票在本行业内部是否更强。
+> 
+
+这和你现在的 alpha 思路很一致。
+
+---
+
+## 3. 市值、估值和基本面信息：适合作为稳健性特征
+
+这一类更偏财务管理视角。
+
+可以加入：
+
+### 市值类
+
+```
+总市值
+流通市值
+log_market_cap
+market_cap_rank
+```
+
+### 估值类
+
+```
+PE
+PB
+PS
+股息率
+```
+
+### 盈利质量类
+
+```
+ROE
+ROA
+毛利率
+净利率
+营业收入增长率
+净利润增长率
+经营现金流/净利润
+资产负债率
+```
+
+### 为什么这些有用？
+
+它们不一定能直接预测未来 5 天涨跌，但可以帮助模型识别：
+
+```
+高估值高波动股票
+低估值防御股票
+高质量稳定股票
+高杠杆风险股票
+盈利改善股票
+```
+
+对于你现在强调“稳健性”的模型来说，基本面因子可以作为风险控制。
+
+---
+
+## 4. 资金流向信息：短期预测价值较高
+
+如果能拿到免费公开数据，可以考虑加入：
+
+```
+主力净流入
+大单净流入
+北向资金持股比例
+北向资金净买入
+融资余额
+融券余额
+融资买入额
+```
+
+短期 5 日收益预测中，资金流向可能比财务报表更直接。
+
+但注意：
+
+> 资金流数据来源复杂，字段稳定性和可复现性要检查。
+> 
+
+如果比赛要求可复现，最好只用稳定公开接口。
+
+---
+
+## 5. 新闻、公告、情绪信息：可以做，但不建议太早做
+
+你可以加入：
+
+```
+公司公告数量
+新闻数量
+研报数量
+舆情情绪
+百度指数/搜索热度
+雪球讨论热度
+```
+
+但作为第一个项目，不建议你马上做 NLP 情绪分析，因为：
+
+1. 数据获取麻烦；
+2. 文本清洗复杂；
+3. 容易不可复现；
+4. 时间对齐困难；
+5. 很容易引入未来信息。
+
+所以建议你后面再做。
+
+---
+
+# 二、具体从哪里获取这些信息？
+
+你可以优先考虑这几个公开数据源。
+
+---
+
+## 1. Baostock
+
+适合继续用，因为你当前项目大概率已经接触它。
+
+可以获取：
+
+```
+日行情
+指数行情
+沪深300成分股
+财务指标
+估值指标
+复权因子
+```
+
+适合第一阶段扩展。
+
+---
+
+## 2. AkShare
+
+AkShare 数据更丰富，适合后续扩展。
+
+可以获取：
+
+```
+A股行情
+指数行情
+指数成分股
+行业板块行情
+概念板块行情
+财务指标
+资金流向
+北向资金
+融资融券
+宏观数据
+```
+
+如果你想引入“其他信息”，AkShare 是很方便的。
+
+---
+
+## 3. Tushare
+
+数据质量较好，但部分接口需要积分。
+
+可以获取：
+
+```
+日行情
+每日指标
+财务报表
+指数成分
+行业分类
+资金流向
+融资融券
+```
+
+如果你有账号权限，可以用；没有的话，先不用。
+
+---
+
+## 4. 中证指数官网 / 交易所官网
+
+适合获取权威指数和成分股信息，但程序化处理稍麻烦。
+
+---
+
+# 三、怎么把其他信息并入模型？
+
+核心流程是：
+
+```
+外部数据表
+→ 清洗字段
+→ 统一股票代码格式
+→ 统一日期格式
+→ 处理发布滞后
+→ merge 到主训练表
+→ 生成衍生特征
+→ 加入 feature_cols
+```
+
+---
+
+## 1. 主表应该长这样
+
+你的主训练表可以保持：
+
+```
+date, stock_id, open, high, low, close, volume, amount, turn, ...
+```
+
+然后新增信息表也要变成类似结构。
+
+---
+
+## 2. 市场指数信息 merge
+
+指数信息是按日期变化，不按股票变化。
+
+比如：
+
+```
+date, hs300_ret_1, hs300_ret_5, hs300_vol_20
+```
+
+合并方式：
+
+```python
+df = df.merge(market_features, on="date", how="left")
+```
+
+合并后，每一天所有股票共享同一组市场特征。
+
+---
+
+## 3. 行业信息 merge
+
+行业基础表一般是：
+
+```
+stock_id, industry
+```
+
+先并入主表：
+
+```python
+df = df.merge(industry_map, on="stock_id", how="left")
+```
+
+然后根据行业和日期构造行业收益：
+
+```python
+industry_ret = (
+    df.groupby(["date", "industry"])["ret_1d"]
+      .mean()
+      .reset_index()
+      .rename(columns={"ret_1d": "industry_ret_1d"})
+)
+
+df = df.merge(industry_ret, on=["date", "industry"], how="left")
+```
+
+---
+
+## 4. 财务信息 merge：最需要小心
+
+财务数据不是每天发布的，而是季报、半年报、年报。
+
+例如：
+
+```
+2025Q1 财报
+报告期：2025-03-31
+实际披露日：2025-04-25
+```
+
+你在 2025-04-10 预测时，不能使用这份财报，因为它还没披露。
+
+所以最严谨的方式是用：
+
+```
+披露日期 announcement_date
+```
+
+而不是报告期日期。
+
+合并时要使用：
+
+```
+截至预测日之前，最近一次已经披露的财务数据
+```
+
+也就是 point-in-time merge。
+
+如果暂时没有披露日期，你可以保守处理：
+
+```
+季报数据延迟 30-60 天再使用
+年报数据延迟 90-120 天再使用
+```
+
+例如：
+
+```python
+financial_df["available_date"] = financial_df["report_date"] + pd.Timedelta(days=60)
+```
+
+然后只在：
+
+```
+date >= available_date
+```
+
+时使用。
+
+---
+
+# 四、推荐你先加哪些特征？
+
+如果你现在要做 v3，我建议先别一下子加太多，按这个顺序来。
+
+---
+
+## 第一组：市场状态特征
+
+优先加：
+
+```
+market_ret_1
+market_ret_5
+market_ret_20
+market_vol_20
+market_breadth_1
+market_breadth_5
+cross_section_std_1
+```
+
+这些可以直接从已有股票池数据构造，不需要额外下载。
+
+### 示例
+
+```python
+def add_market_features(df):
+    df = df.copy()
+    
+    daily = df.groupby("date").agg(
+        market_ret_1=("ret_1", "mean"),
+        market_breadth_1=("ret_1", lambda x: (x > 0).mean()),
+        cross_section_std_1=("ret_1", "std"),
+        market_amount=("amount", "sum")
+    ).reset_index()
+    
+    daily["market_ret_5"] = daily["market_ret_1"].rolling(5).sum()
+    daily["market_ret_20"] = daily["market_ret_1"].rolling(20).sum()
+    daily["market_vol_20"] = daily["market_ret_1"].rolling(20).std()
+    daily["market_breadth_5"] = daily["market_breadth_1"].rolling(5).mean()
+    
+    df = df.merge(daily, on="date", how="left")
+    return df
+```
+
+这个最简单，而且不引入新数据源。
+
+---
+
+## 第二组：行业特征
+
+如果能拿到行业分类，建议加：
+
+```
+industry
+industry_ret_5
+industry_ret_20
+industry_rank_5
+stock_vs_industry_ret_20
+```
+
+### 示例
+
+```python
+def add_industry_features(df):
+    df = df.copy()
+    
+    industry_daily = (
+        df.groupby(["date", "industry"])
+          .agg(
+              industry_ret_1=("ret_1", "mean"),
+              industry_amount=("amount", "sum"),
+              industry_breadth=("ret_1", lambda x: (x > 0).mean())
+          )
+          .reset_index()
+    )
+    
+    industry_daily["industry_ret_5"] = (
+        industry_daily.groupby("industry")["industry_ret_1"]
+        .rolling(5)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+    
+    industry_daily["industry_ret_20"] = (
+        industry_daily.groupby("industry")["industry_ret_1"]
+        .rolling(20)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+    
+    df = df.merge(industry_daily, on=["date", "industry"], how="left")
+    
+    df["stock_vs_industry_ret_20"] = df["return_20"] - df["industry_ret_20"]
+    
+    return df
+```
+
+---
+
+## 第三组：估值和市值
+
+如果你能获取每日指标，可以加：
+
+```
+pe_ttm
+pb
+ps
+total_mv
+circ_mv
+log_mv
+pe_rank
+pb_rank
+mv_rank
+```
+
+建议转成横截面 rank：
+
+```python
+for col in ["pe_ttm", "pb", "log_mv"]:
+    df[f"{col}_rank"] = df.groupby("date")[col].rank(pct=True)
+```
+
+因为不同日期估值水平不可直接比较，rank 更稳。
+
+---
+
+## 第四组：财务质量
+
+后面再加：
+
+```
+roe
+roa
+gross_margin
+net_margin
+revenue_growth
+profit_growth
+debt_to_asset
+ocf_to_profit
+```
+
+同样建议做横截面 rank：
+
+```
+roe_rank
+profit_growth_rank
+debt_to_asset_rank
+```
+
+---
+
+# 五、引入其他信息时最容易犯的错误
+
+---
+
+## 1. 用到了未来数据
+
+这是最大问题。
+
+比如你用：
+
+```
+2025 年年报数据
+```
+
+预测：
+
+```
+2025 年 12 月之前的股票
+```
+
+这就可能泄露，因为年报通常次年才披露。
+
+---
+
+## 2. 日期没有对齐
+
+比如股票数据是交易日，财务数据是报告期日期，指数数据可能是自然日。
+
+需要统一为：
+
+```
+交易日 date
+```
+
+---
+
+## 3. 股票代码格式不一致
+
+常见格式有：
+
+```
+600000
+sh.600000
+600000.SH
+SZ000001
+000001.SZ
+```
+
+建议项目内部统一成一种。
+
+例如比赛提交需要：
+
+```
+600000
+000001
+```
+
+但建模时可以用：
+
+```
+sh.600000
+sz.000001
+```
+
+最后输出前再转换。
+
+---
+
+## 4. 缺失值处理不当
+
+新信息一加，缺失值会变多。
+
+建议：
+
+```python
+df[col] = df.groupby("stock_id")[col].ffill()
+```
+
+但只能向前填充，不能向后填充。
+
+对于财务数据：
+
+```
+上一期财报可以延续使用
+```
+
+但不能用未来财报填过去。
+
+---
+
+## 5. 信息太多导致过拟合
+
+你的样本量虽然看起来不少，但金融信号噪声很大。
+
+所以建议每次只加一类信息，然后做 ablation：
+
+```
+baseline
++ market features
++ industry features
++ valuation features
++ financial features
+```
+
+看哪一类真的提升滚动验证结果。
+
+---
+
+# 六、建议你下一步具体怎么做
+
+我建议你分三步。
+
+---
+
+## Step 1：不下载新数据，先从现有数据构造市场状态
+
+先加：
+
+```
+market_ret_1
+market_ret_5
+market_ret_20
+market_vol_20
+market_breadth_1
+market_breadth_5
+cross_section_std_1
+```
+
+这是最稳的，因为不涉及数据源和合并问题。
+
+---
+
+## Step 2：加入行业分类与行业轮动
+
+用 Baostock / AkShare 获取行业分类。
+
+新增：
+
+```
+industry
+industry_ret_5
+industry_ret_20
+industry_breadth
+stock_vs_industry_ret_20
+```
+
+然后选股时加一个约束：
+
+```
+同一行业最多 2 只
+```
+
+这一步很符合你的“稳健性”目标。
+
+---
+
+## Step 3：加入估值和基本面
+
+优先加简单、容易对齐的：
+
+```
+PE
+PB
+市值
+ROE
+资产负债率
+净利润增长率
+```
+
+但财务数据要注意披露滞后。
+
+---
+
+# 七、最推荐你的 v3 信息扩展方案
+
+如果你想保持项目简洁但有效，我建议 v3 就做这些：
+
+```
+1. 市场状态特征
+2. 行业轮动特征
+3. 行业分散约束
+4. 估值 rank 特征
+```
+
+暂时不要急着做新闻情绪和复杂宏观。
+
+这样 v3 可以写成：
+
+> 在风险调整 alpha 模型基础上，引入市场状态、行业轮动和估值风格信息，使模型能够识别不同市场环境下的相对强势股票，并通过行业分散约束降低组合集中风险。
+> 
+
+这个方向非常合理，也容易实现和解释。

@@ -1,0 +1,9 @@
+services:
+  myprogramme:
+    build: .
+    image: myprogramme:latest
+    working_dir: /app
+    volumes:
+      - ./output:/app/output
+      - ./temp:/app/temp
+    command: sleep infinity

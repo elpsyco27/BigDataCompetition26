@@ -1,0 +1,15 @@
+[project]
+name = "myprogramme"
+version = "0.1.0"
+description = "Personal project framework for the 2026 Big Data Challenge stock selection task."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "baostock>=0.8.9",
+    "joblib>=1.5.0",
+    "lightgbm>=4.0.0",
+    "numpy>=1.26.0",
+    "pandas>=2.0.0",
+    "scikit-learn>=1.4.0",
+    "tqdm>=4.66.0",
+]
