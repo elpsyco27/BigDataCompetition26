@@ -489,6 +489,12 @@ python scripts/archive_experiment.py --name EXP_NAME --model-type MODEL --target
 
 ## 12. v3: Rank Target + Rolling Validation
 
+独立 v3 model card 见：
+
+```text
+docs/model_card_v3.md
+```
+
 v3 的目标不是直接替代 v2，而是升级验证体系与横截面排序目标。
 
 新增内容：
