@@ -47,6 +47,8 @@ def main():
     model = bundle["model"]
     scaler = bundle["scaler"]
     feature_cols = bundle["feature_cols"]
+    risk_power = bundle.get("best_risk_power", 1.0)
+    risk_floor_quantile = bundle.get("risk_floor_quantile", 0.10)
 
     df = load_price_data(data_file)
     df, _ = engineer_features(df)
@@ -59,7 +61,13 @@ def main():
 
     x = pd.DataFrame(scaler.transform(latest[feature_cols]), columns=feature_cols, index=latest.index)
     latest[PREDICTION_COL] = model.predict(x)
-    latest = add_risk_adjusted_score(latest, PREDICTION_COL, SCORE_COL)
+    latest = add_risk_adjusted_score(
+        latest,
+        PREDICTION_COL,
+        SCORE_COL,
+        risk_power=risk_power,
+        floor_quantile=risk_floor_quantile,
+    )
 
     selected = latest.nlargest(TOP_K, SCORE_COL)
     output = pd.DataFrame(

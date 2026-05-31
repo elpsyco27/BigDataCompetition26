@@ -483,6 +483,66 @@ python scripts/archive_experiment.py --name EXP_NAME --model-type MODEL --target
 - 修改特征后必须重新训练模型，否则 `feature_cols` 与模型不匹配。
 - 实盘预测应使用 `Data/stock_data.csv`，不要使用切分后的 `Data/train.csv`。
 - 回测评分依赖 `Data/test.csv`，真实未来预测没有对应自评分。
-- 当前没有使用 git；历史实验通过 `experiments/` 目录保存。
+- 代码版本使用 git tag 保存；模型、结果和实验元数据仍通过 `experiments/` 目录保存。
 - 新增财务因子时需要处理财报发布日期滞后，不能直接使用未来财报数据。
 - 后续如果引入 `LGBMRanker`，训练接口需要按交易日提供 group 信息。
+
+## 12. v3: Rank Target + Rolling Validation
+
+v3 的目标不是直接替代 v2，而是升级验证体系与横截面排序目标。
+
+新增内容：
+
+```text
+target_rank
+future_alpha_z_5d
+market_ret_1/5/20
+market_vol_20
+market_breadth_1/5
+cross_section_std_1
+rolling validation
+Rank IC
+risk_power search
+```
+
+v3 默认目标：
+
+```text
+target_rank = same-date rank_pct(future_return_5d)
+```
+
+v3 rolling validation：
+
+```text
+train 70% -> valid 40 days
+train 75% -> valid 40 days
+train 80% -> valid 40 days
+train 85% -> valid 40 days
+train 90% -> valid 40 days
+```
+
+v3 risk power 搜索：
+
+```text
+score = pred / risk^p
+p in [0, 0.25, 0.5, 0.75, 1.0]
+```
+
+当前结果：
+
+```text
+best_risk_power: 0.0
+rolling mean_topk_return: 0.0061040593
+rolling rank_ic_mean: 0.0193732479
+holdout mean_topk_return: 0.0068016101
+holdout rank_ic_mean: 0.0505947433
+self_score: -0.0088705027
+```
+
+结论：
+
+```text
+v3 证明了 rank target 和 rolling validation 可以工作，但最近 5 日自评分低于 v2。
+当前不建议直接用 v3 替代 v2 做实盘默认策略。
+下一步应比较 future_alpha_5d、future_alpha_z_5d 和 target_rank 在同一 rolling validation 框架下的表现。
+```

@@ -30,12 +30,19 @@ PCT_CHANGE_COL = "涨跌幅"
 RAW_RETURN_COL = "future_return_5d"
 MARKET_RETURN_COL = "market_future_return_5d"
 TARGET_COL = "future_alpha_5d"
+ALPHA_Z_COL = "future_alpha_z_5d"
+TARGET_RANK_COL = "target_rank"
+TARGET_MODE = "target_rank"
 PREDICTION_COL = "pred_alpha"
 SCORE_COL = "score"
 
 RANDOM_SEED = 42
 TOP_K = 5
 VALID_DAYS = 40
+ROLLING_VALID_DAYS = 40
+ROLLING_TRAIN_FRACTIONS = [0.70, 0.75, 0.80, 0.85, 0.90]
+RISK_POWERS = [0.0, 0.25, 0.5, 0.75, 1.0]
+RISK_FLOOR_QUANTILE = 0.10
 
 MODEL_PARAMS = {
     "n_estimators": 500,

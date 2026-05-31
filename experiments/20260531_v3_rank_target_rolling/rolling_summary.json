@@ -1,0 +1,66 @@
+{
+  "target_mode": "target_rank",
+  "best_risk_power": 0.0,
+  "risk_power_summary": [
+    {
+      "risk_power": 0.0,
+      "mean_topk_return": 0.006104059279125786,
+      "median_topk_return": 0.005134759200555797,
+      "mean_topk_alpha": 0.004044533473642216,
+      "topk_win_rate": 0.5599999999999999,
+      "max_drawdown": -0.19838179038389292,
+      "rank_ic_mean": 0.01937324789009699,
+      "rank_ic_std": 0.20068730731562248,
+      "rank_ic_ir": 0.09873294965604999,
+      "folds": 5
+    },
+    {
+      "risk_power": 0.25,
+      "mean_topk_return": 0.0009526760630847672,
+      "median_topk_return": -0.0011897660167450642,
+      "mean_topk_alpha": -0.0011068497423988035,
+      "topk_win_rate": 0.475,
+      "max_drawdown": -0.1512713541439949,
+      "rank_ic_mean": 0.01192138339053632,
+      "rank_ic_std": 0.21507896932618703,
+      "rank_ic_ir": 0.062362502172457354,
+      "folds": 5
+    },
+    {
+      "risk_power": 0.5,
+      "mean_topk_return": -0.0010971386579853954,
+      "median_topk_return": -0.000892693221528579,
+      "mean_topk_alpha": -0.003156664463468966,
+      "topk_win_rate": 0.465,
+      "max_drawdown": -0.1597550119424479,
+      "rank_ic_mean": -0.002213164789116903,
+      "rank_ic_std": 0.23446091895033233,
+      "rank_ic_ir": -0.01875322235107151,
+      "folds": 5
+    },
+    {
+      "risk_power": 0.75,
+      "mean_topk_return": -0.00141415769573818,
+      "median_topk_return": -0.0018147077613198052,
+      "mean_topk_alpha": -0.003473683501221751,
+      "topk_win_rate": 0.45,
+      "max_drawdown": -0.15935192328791453,
+      "rank_ic_mean": -0.0072737146508378425,
+      "rank_ic_std": 0.24376708843823627,
+      "rank_ic_ir": -0.04512547687224604,
+      "folds": 5
+    },
+    {
+      "risk_power": 1.0,
+      "mean_topk_return": -0.0018089206877169525,
+      "median_topk_return": -0.00240112658522913,
+      "mean_topk_alpha": -0.003868446493200524,
+      "topk_win_rate": 0.44000000000000006,
+      "max_drawdown": -0.16292587975894082,
+      "rank_ic_mean": -0.009679052396500245,
+      "rank_ic_std": 0.24839089896472671,
+      "rank_ic_ir": -0.056232300371543475,
+      "folds": 5
+    }
+  ]
+}

@@ -66,12 +66,18 @@ def archive_experiment(
     model_file = MODEL_DIR / "model.joblib"
     valid_summary_file = MODEL_DIR / "valid_summary.json"
     valid_detail_file = MODEL_DIR / "valid_detail.csv"
+    rolling_summary_file = MODEL_DIR / "rolling_summary.json"
+    rolling_detail_file = MODEL_DIR / "rolling_detail.csv"
+    rolling_topk_detail_file = MODEL_DIR / "rolling_topk_detail.csv"
     score_file = TEMP_DIR / "tmp.csv"
 
     copied = {
         "model": _copy_if_exists(model_file, exp_dir / "model.joblib"),
         "valid_summary": _copy_if_exists(valid_summary_file, exp_dir / "valid_summary.json"),
         "valid_detail": _copy_if_exists(valid_detail_file, exp_dir / "valid_detail.csv"),
+        "rolling_summary": _copy_if_exists(rolling_summary_file, exp_dir / "rolling_summary.json"),
+        "rolling_detail": _copy_if_exists(rolling_detail_file, exp_dir / "rolling_detail.csv"),
+        "rolling_topk_detail": _copy_if_exists(rolling_topk_detail_file, exp_dir / "rolling_topk_detail.csv"),
         "result": _copy_if_exists(OUTPUT_FILE, exp_dir / "result.csv"),
         "score": _copy_if_exists(score_file, exp_dir / "score.csv"),
     }
@@ -84,6 +90,10 @@ def archive_experiment(
     if valid_summary_file.exists():
         with open(valid_summary_file, "r", encoding="utf-8") as f:
             valid_summary = json.load(f)
+    rolling_summary = {}
+    if rolling_summary_file.exists():
+        with open(rolling_summary_file, "r", encoding="utf-8") as f:
+            rolling_summary = json.load(f)
 
     manifest = {
         "experiment_name": experiment_name,
@@ -96,6 +106,7 @@ def archive_experiment(
         "test_data": _csv_range(TEST_FILE),
         "raw_data": _csv_range(DATA_DIR / "stock_data.csv"),
         "valid_summary": valid_summary,
+        "rolling_summary": rolling_summary,
         "self_score": _read_score(score_file),
         "copied_files": copied,
     }

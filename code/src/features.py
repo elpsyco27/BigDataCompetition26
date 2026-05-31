@@ -9,12 +9,14 @@ from config import (
     DATE_COL,
     HIGH_COL,
     LOW_COL,
+    ALPHA_Z_COL,
     MARKET_RETURN_COL,
     OPEN_COL,
     PCT_CHANGE_COL,
     RAW_RETURN_COL,
     STOCK_COL,
     TARGET_COL,
+    TARGET_RANK_COL,
     TURNOVER_COL,
     VOLUME_COL,
 )
@@ -122,6 +124,22 @@ def engineer_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     df["pct_change"] = df[PCT_CHANGE_COL]
     df["amplitude"] = df[AMPLITUDE_COL]
 
+    market_daily = (
+        df.groupby(DATE_COL)
+        .agg(
+            market_ret_1=("daily_return", "mean"),
+            market_breadth_1=("daily_return", lambda x: float((x > 0).mean())),
+            cross_section_std_1=("daily_return", "std"),
+            market_amount=(AMOUNT_COL, "sum"),
+        )
+        .sort_index()
+    )
+    market_daily["market_ret_5"] = market_daily["market_ret_1"].rolling(5, min_periods=1).sum()
+    market_daily["market_ret_20"] = market_daily["market_ret_1"].rolling(20, min_periods=1).sum()
+    market_daily["market_vol_20"] = market_daily["market_ret_1"].rolling(20, min_periods=2).std()
+    market_daily["market_breadth_5"] = market_daily["market_breadth_1"].rolling(5, min_periods=1).mean()
+    df = df.merge(market_daily.reset_index(), on=DATE_COL, how="left")
+
     rank_cols = [
         "return_1",
         "return_5",
@@ -146,6 +164,8 @@ def engineer_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             STOCK_COL,
             DATE_COL,
             TARGET_COL,
+            ALPHA_Z_COL,
+            TARGET_RANK_COL,
             RAW_RETURN_COL,
             MARKET_RETURN_COL,
         }
@@ -164,7 +184,16 @@ def add_alpha_label(df: pd.DataFrame) -> pd.DataFrame:
     df[RAW_RETURN_COL] = (open_t5 - open_t1) / (open_t1 + 1e-12)
     df[MARKET_RETURN_COL] = df.groupby(DATE_COL)[RAW_RETURN_COL].transform("mean")
     df[TARGET_COL] = df[RAW_RETURN_COL] - df[MARKET_RETURN_COL]
-    df = df[(open_t1 > 1e-8) & df[RAW_RETURN_COL].notna() & df[TARGET_COL].notna()].copy()
+    daily_std = df.groupby(DATE_COL)[RAW_RETURN_COL].transform("std")
+    df[ALPHA_Z_COL] = df[TARGET_COL] / (daily_std + 1e-6)
+    df[TARGET_RANK_COL] = df.groupby(DATE_COL)[RAW_RETURN_COL].rank(pct=True)
+    df = df[
+        (open_t1 > 1e-8)
+        & df[RAW_RETURN_COL].notna()
+        & df[TARGET_COL].notna()
+        & df[ALPHA_Z_COL].notna()
+        & df[TARGET_RANK_COL].notna()
+    ].copy()
     return df
 
 
